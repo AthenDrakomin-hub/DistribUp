@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>PayloadContent</key>
+    <array>
+        <dict>
+            <key>URL</key>
+            <string>{{COLLECT_URL}}</string>
+            <key>Title</key>
+            <string>UDID 采集</string>
+        </dict>
+    </array>
+    <key>PayloadDescription</key>
+    <string>采集设备 UDID 用于签名分发</string>
+    <key>PayloadDisplayName</key>
+    <string>UDID 采集</string>
+    <key>PayloadIdentifier</key>
+    <string>com.distribup.udid.collect</string>
+    <key>PayloadType</key>
+    <string>Configuration</string>
+    <key>PayloadUUID</key>
+    <string>{{UUID}}</string>
+    <key>PayloadVersion</key>
+    <integer>1</integer>
+</dict>
+</plist>
