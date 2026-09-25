@@ -47,9 +47,17 @@ router.post('/:appId', checkPermission(['user', 'admin']), upload.single('file')
     // 验证应用存在
     const app = await db.get('SELECT * FROM apps WHERE id = ? AND team_id IN (SELECT team_id FROM users WHERE id = ?)',
       [appId, req.user.id]);
-    
+
     if (!app) {
       return res.status(404).json({ error: '应用不存在或无权限' });
+    }
+
+    // 如果应用指定了平台，校验上传文件类型
+    if (app.platform === 'android' && !['.apk', '.obb', '.xapk'].includes(path.extname(req.file.originalname).toLowerCase())) {
+      return res.status(400).json({ error: 'Android 应用只支持 APK/XAPK/OBB 文件' });
+    }
+    if (app.platform === 'ios' && path.extname(req.file.originalname).toLowerCase() !== '.ipa') {
+      return res.status(400).json({ error: 'iOS 应用只支持 IPA 文件' });
     }
 
     if (!req.file) {
@@ -81,7 +89,8 @@ router.post('/:appId', checkPermission(['user', 'admin']), upload.single('file')
       url: result.url,
       md5,
       size: fileBuffer.length,
-      filename
+      filename,
+      platform
     });
   } catch (err) {
     console.error('上传失败:', err);

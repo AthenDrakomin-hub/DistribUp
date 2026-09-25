@@ -1,0 +1,85 @@
+export const LOGIN_HTML = `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>登录 - DistribUp</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); height: 100vh; display: flex; align-items: center; justify-content: center; }
+        .login-box { background: white; padding: 40px; border-radius: 16px; box-shadow: 0 10px 40px rgba(0,0,0,0.2); width: 100%; max-width: 400px; }
+        .login-box h2 { text-align: center; margin-bottom: 30px; color: #333; }
+        .form-group { margin-bottom: 20px; }
+        .form-group label { display: block; margin-bottom: 8px; color: #666; }
+        .form-group input { width: 100%; padding: 14px; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 16px; transition: border-color 0.3s; }
+        .form-group input:focus { outline: none; border-color: #667eea; }
+        .btn { width: 100%; padding: 14px; background: #667eea; color: white; border: none; border-radius: 8px; font-size: 16px; font-weight: 600; cursor: pointer; transition: background 0.3s; }
+        .btn:hover { background: #5568d3; }
+        .switch { text-align: center; margin-top: 20px; color: #666; }
+        .switch a { color: #667eea; text-decoration: none; }
+        .error { color: #e74c3c; font-size: 14px; margin-top: 10px; text-align: center; display: none; }
+    </style>
+</head>
+<body>
+    <div class="login-box">
+        <h2>📦 DistribUp</h2>
+        <div class="form-group">
+            <label>用户名 / 邮箱</label>
+            <input type="text" id="username" placeholder="请输入用户名或邮箱">
+        </div>
+        <div class="form-group">
+            <label>密码</label>
+            <input type="password" id="password" placeholder="请输入密码">
+        </div>
+        <div id="error" class="error"></div>
+        <button class="btn" onclick="login()">登录</button>
+        <div class="switch">
+            还没有账号？<a href="#" onclick="showRegister()">立即注册</a>
+        </div>
+    </div>
+    
+    <script>
+        async function login() {
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            const errorEl = document.getElementById('error');
+            
+            if (!username || !password) {
+                errorEl.textContent = '请填写完整信息';
+                errorEl.style.display = 'block';
+                return;
+            }
+            
+            try {
+                const res = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password })
+                });
+                const data = await res.json();
+                
+                if (data.token) {
+                    localStorage.setItem('token', data.token);
+                    window.location.href = '/admin.html';
+                } else {
+                    errorEl.textContent = data.error || '登录失败';
+                    errorEl.style.display = 'block';
+                }
+            } catch (err) {
+                errorEl.textContent = '网络错误';
+                errorEl.style.display = 'block';
+            }
+        }
+        
+        function showRegister() {
+            window.location.href = '/register.html';
+        }
+        
+        // 回车登录
+        document.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') login();
+        });
+    </script>
+</body>
+</html>
+`;

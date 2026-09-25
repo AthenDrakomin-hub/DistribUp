@@ -1,0 +1,33 @@
+name = "distribup"
+main = "src/workers/index.ts"
+compatibility_date = "2024-06-05"
+compatibility_flags = ["nodejs_compat"]
+
+# Workers 运行时环境变量
+[vars]
+JWT_SECRET = "a3f8b2c7d9e1f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9"
+BASE_URL = "https://distribup.athendrakomin.workers.dev"
+NODE_ENV = "production"
+MAX_UPLOAD_SIZE = "524288000"  # 500MB
+
+# App Store Connect API（可选，iOS 设备自动注册用）
+ASC_ISSUER_ID = ""
+ASC_KEY_ID = ""
+ASC_PRIVATE_KEY = ""
+
+# 静态文件由 Worker 内联提供（base64 嵌入）
+# assets = { directory = "public" }
+
+[[d1_databases]]
+binding = "distribup_db"
+database_name = "distribup-db"
+database_id = "cab688d7-7e5c-4234-b0ae-a3d49592bf92"
+
+[[r2_buckets]]
+binding = "STORAGE"
+bucket_name = "distribup-files"
+
+# 日志推送（可选）
+[observability]
+enabled = true
+head_sampling_rate = 1

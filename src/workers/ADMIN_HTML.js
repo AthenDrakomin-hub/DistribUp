@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+export const ADMIN_HTML = `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
@@ -155,7 +155,7 @@
         
         async function api(path, options = {}) {
             const res = await fetch(API_BASE + path, {
-                headers: { 'Authorization': `Bearer ${token}` },
+                headers: { 'Authorization': \x60Bearer ${token}\x60 },
                 ...options
             });
             return res.json();
@@ -171,7 +171,7 @@
         async function loadApps() {
             const apps = await api('/apps');
             const tbody = document.getElementById('appsList');
-            tbody.innerHTML = (apps.apps || []).map(app => `
+            tbody.innerHTML = (apps.apps || []).map(app => \x60
                 <tr>
                     <td>${app.id}</td>
                     <td>${app.name}</td>
@@ -183,7 +183,7 @@
                         <button class="btn btn-danger" onclick="deleteApp(${app.id})">删除</button>
                     </td>
                 </tr>
-            `).join('');
+            \x60).join('');
         }
         
         function showPage(page) {
@@ -226,7 +226,7 @@
         }
         
         function uploadApp(appId) {
-            window.location.href = `/upload.html?id=${appId}`;
+            window.location.href = \x60/upload.html?id=${appId}\x60;
         }
         
         function logout() {
@@ -240,3 +240,4 @@
     </script>
 </body>
 </html>
+`;

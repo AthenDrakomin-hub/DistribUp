@@ -6,23 +6,28 @@ const { generateMobileConfig } = require('../templates/mobileconfig');
 
 const router = express.Router();
 
-// 生成 manifest.plist
+// 生成 manifest.plist（仅 iOS）
 router.get('/manifest/:bundleId', async (req, res) => {
   try {
     const app = await db.get('SELECT * FROM apps WHERE bundle_id = ?', [req.params.bundleId]);
     if (!app) {
       return res.status(404).json({ error: '应用不存在' });
     }
-    
+
+    // iOS 才支持 OTA manifest
+    if (app.platform === 'android') {
+      return res.status(400).json({ error: 'Android 应用不支持 OTA 安装，请使用直链下载' });
+    }
+
     const latestUpload = await db.get(
       'SELECT * FROM uploads WHERE app_id = ? ORDER BY created_at DESC LIMIT 1',
       [app.id]
     );
-    
+
     if (!latestUpload) {
       return res.status(404).json({ error: '没有可用的版本' });
     }
-    
+
     const baseUrl = process.env.BASE_URL || `http://${req.headers.host}`;
     const manifest = generateManifest({
       name: app.name,
@@ -33,7 +38,7 @@ router.get('/manifest/:bundleId', async (req, res) => {
       fileSize: latestUpload.file_size,
       md5: ''
     });
-    
+
     res.setHeader('Content-Type', 'text/xml');
     res.send(manifest);
   } catch (err) {
@@ -88,23 +93,63 @@ router.post('/collect', async (req, res) => {
   }
 });
 
-// 生成 OTA 安装链接
+// 生成 OTA 安装链接（iOS）
 router.get('/ota/:bundleId', async (req, res) => {
   try {
     const app = await db.get('SELECT * FROM apps WHERE bundle_id = ?', [req.params.bundleId]);
     if (!app) {
       return res.status(404).json({ error: '应用不存在' });
     }
-    
+
+    if (app.platform === 'android') {
+      return res.status(400).json({ error: 'Android 应用不支持 OTA 安装，请使用直链下载' });
+    }
+
     const baseUrl = process.env.BASE_URL || `http://${req.headers.host}`;
     const manifestUrl = `${baseUrl}/api/install/manifest/${app.bundle_id}`;
-    
+
     res.json({
       itmsUrl: `itms-services://?action=download-manifest&url=${encodeURIComponent(manifestUrl)}`,
       manifestUrl
     });
   } catch (err) {
     res.status(500).json({ error: '生成链接失败' });
+  }
+});
+
+// 获取 Android 下载链接
+router.get('/android-download/:bundleId', async (req, res) => {
+  try {
+    const app = await db.get('SELECT * FROM apps WHERE bundle_id = ?', [req.params.bundleId]);
+    if (!app) {
+      return res.status(404).json({ error: '应用不存在' });
+    }
+
+    if (app.platform !== 'android') {
+      return res.status(400).json({ error: '该接口仅支持 Android 应用' });
+    }
+
+    const latestUpload = await db.get(
+      'SELECT * FROM uploads WHERE app_id = ? ORDER BY created_at DESC LIMIT 1',
+      [app.id]
+    );
+
+    if (!latestUpload) {
+      return res.status(404).json({ error: '没有可用的版本' });
+    }
+
+    const baseUrl = process.env.BASE_URL || `http://${req.headers.host}`;
+    const downloadUrl = `${baseUrl}/signed/${latestUpload.filename}`;
+
+    res.json({
+      appName: app.name,
+      version: app.version,
+      fileSize: latestUpload.file_size,
+      downloadUrl,
+      qrCode: `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(downloadUrl)}`
+    });
+  } catch (err) {
+    res.status(500).json({ error: '获取下载链接失败' });
   }
 });
 

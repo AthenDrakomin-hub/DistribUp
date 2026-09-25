@@ -57,7 +57,9 @@ async function createTables() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       team_id INTEGER NOT NULL,
       name TEXT NOT NULL,
+      platform TEXT DEFAULT 'ios' CHECK(platform IN ('ios', 'android')),
       bundle_id TEXT NOT NULL,
+      package_name TEXT,
       version TEXT DEFAULT '1.0.0',
       description TEXT,
       icon_path TEXT,
@@ -77,6 +79,8 @@ async function createTables() {
       certificate_password TEXT,
       mobileprovision TEXT,
       expires_at DATETIME,
+      keystore_file TEXT,
+      keystore_password TEXT,
       is_active BOOLEAN DEFAULT 1,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (team_id) REFERENCES teams(id)

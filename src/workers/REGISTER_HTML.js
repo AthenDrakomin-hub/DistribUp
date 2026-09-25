@@ -1,0 +1,92 @@
+export const REGISTER_HTML = `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>注册 - DistribUp</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); height: 100vh; display: flex; align-items: center; justify-content: center; }
+        .login-box { background: white; padding: 40px; border-radius: 16px; box-shadow: 0 10px 40px rgba(0,0,0,0.2); width: 100%; max-width: 400px; }
+        .login-box h2 { text-align: center; margin-bottom: 30px; color: #333; }
+        .form-group { margin-bottom: 20px; }
+        .form-group label { display: block; margin-bottom: 8px; color: #666; }
+        .form-group input { width: 100%; padding: 14px; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 16px; transition: border-color 0.3s; }
+        .form-group input:focus { outline: none; border-color: #667eea; }
+        .btn { width: 100%; padding: 14px; background: #667eea; color: white; border: none; border-radius: 8px; font-size: 16px; font-weight: 600; cursor: pointer; transition: background 0.3s; }
+        .btn:hover { background: #5568d3; }
+        .switch { text-align: center; margin-top: 20px; color: #666; }
+        .switch a { color: #667eea; text-decoration: none; }
+        .error { color: #e74c3c; font-size: 14px; margin-top: 10px; text-align: center; display: none; }
+    </style>
+</head>
+<body>
+    <div class="login-box">
+        <h2>📦 注册账号</h2>
+        <div class="form-group">
+            <label>用户名</label>
+            <input type="text" id="username" placeholder="请输入用户名">
+        </div>
+        <div class="form-group">
+            <label>邮箱</label>
+            <input type="email" id="email" placeholder="请输入邮箱">
+        </div>
+        <div class="form-group">
+            <label>密码</label>
+            <input type="password" id="password" placeholder="请输入密码">
+        </div>
+        <div class="form-group">
+            <label>确认密码</label>
+            <input type="password" id="confirmPassword" placeholder="请再次输入密码">
+        </div>
+        <div id="error" class="error"></div>
+        <button class="btn" onclick="register()">注册</button>
+        <div class="switch">
+            已有账号？<a href="/login.html">立即登录</a>
+        </div>
+    </div>
+    
+    <script>
+        async function register() {
+            const username = document.getElementById('username').value;
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            const confirmPassword = document.getElementById('confirmPassword').value;
+            const errorEl = document.getElementById('error');
+            
+            if (!username || !password) {
+                errorEl.textContent = '请填写完整信息';
+                errorEl.style.display = 'block';
+                return;
+            }
+            
+            if (password !== confirmPassword) {
+                errorEl.textContent = '两次密码不一致';
+                errorEl.style.display = 'block';
+                return;
+            }
+            
+            try {
+                const res = await fetch('/api/auth/register', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, email, password })
+                });
+                const data = await res.json();
+                
+                if (data.token) {
+                    localStorage.setItem('token', data.token);
+                    window.location.href = '/admin.html';
+                } else {
+                    errorEl.textContent = data.error || '注册失败';
+                    errorEl.style.display = 'block';
+                }
+            } catch (err) {
+                errorEl.textContent = '网络错误';
+                errorEl.style.display = 'block';
+            }
+        }
+    </script>
+</body>
+</html>
+`;

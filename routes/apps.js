@@ -7,14 +7,14 @@ const router = express.Router();
 // 获取应用列表
 router.get('/', checkPermission(['user', 'admin']), async (req, res) => {
   try {
-    const query = req.user.role === 'admin' 
+    const query = req.user.role === 'admin'
       ? 'SELECT * FROM apps ORDER BY created_at DESC'
       : 'SELECT * FROM apps WHERE team_id = ? ORDER BY created_at DESC';
-    
+
     const apps = req.user.role === 'admin'
       ? await db.all(query)
       : await db.all(query, [req.user.team_id]);
-    
+
     res.json({ apps });
   } catch (err) {
     res.status(500).json({ error: '获取应用列表失败' });
@@ -24,21 +24,24 @@ router.get('/', checkPermission(['user', 'admin']), async (req, res) => {
 // 创建应用
 router.post('/', checkPermission(['user', 'admin']), async (req, res) => {
   try {
-    const { name, bundle_id, version, description } = req.body;
-    
+    const { name, platform, bundle_id, package_name, version, description } = req.body;
+
     if (!name || !bundle_id) {
-      return res.status(400).json({ error: '应用名称和 Bundle ID 不能为空' });
+      return res.status(400).json({ error: '应用名称和 Bundle ID/包名 不能为空' });
     }
 
-    // 检查 Bundle ID 是否已存在
-    const existing = await db.get('SELECT id FROM apps WHERE bundle_id = ? AND team_id = ?', [bundle_id, req.user.team_id]);
+    // 检查 Bundle ID / 包名 是否已存在
+    const existing = await db.get(
+      'SELECT id FROM apps WHERE bundle_id = ? AND team_id = ?',
+      [bundle_id, req.user.team_id]
+    );
     if (existing) {
       return res.status(400).json({ error: 'Bundle ID 已存在' });
     }
 
     const result = await db.run(
-      'INSERT INTO apps (team_id, name, bundle_id, version, description, created_by) VALUES (?, ?, ?, ?, ?, ?)',
-      [req.user.team_id, name, bundle_id, version || '1.0.0', description, req.user.id]
+      'INSERT INTO apps (team_id, name, platform, bundle_id, package_name, version, description, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [req.user.team_id, platform || 'ios', name, bundle_id, package_name || null, version || '1.0.0', description, req.user.id]
     );
 
     const app = await db.get('SELECT * FROM apps WHERE id = ?', [result.id]);
@@ -73,13 +76,13 @@ router.get('/:id', checkPermission(['user', 'admin']), async (req, res) => {
 // 更新应用
 router.put('/:id', checkPermission(['user', 'admin']), async (req, res) => {
   try {
-    const { name, bundle_id, version, description } = req.body;
-    
+    const { name, platform, bundle_id, package_name, version, description } = req.body;
+
     await db.run(
-      'UPDATE apps SET name = ?, bundle_id = ?, version = ?, description = ? WHERE id = ? AND team_id IN (SELECT team_id FROM users WHERE id = ?)',
-      [name, bundle_id, version, description, req.params.id, req.user.id]
+      'UPDATE apps SET name = ?, platform = ?, bundle_id = ?, package_name = ?, version = ?, description = ? WHERE id = ? AND team_id IN (SELECT team_id FROM users WHERE id = ?)',
+      [name, platform, bundle_id, package_name, version, description, req.params.id, req.user.id]
     );
-    
+
     res.json({ message: '更新成功' });
   } catch (err) {
     res.status(500).json({ error: '更新失败' });

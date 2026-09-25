@@ -1,4 +1,10 @@
 node_modules/
-.env
+dist/
+.wrangler/
+*.db
 data/
-logs/
+uploads/
+signed/
+.env
+.env.local
+.DS_Store
