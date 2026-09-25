@@ -43,7 +43,7 @@ async function pullConfig() {
   const p12File = path.join(workDir, 'cert.p12');
   const provFile = path.join(workDir, 'profile.mobileprovision');
 
-  if (c.asc_p8_path_content) fs.writeFileSync(p8File, c.asc_p8_path_content);
+  if (c.asc_p8_path_content) fs.writeFileSync(p8File, Buffer.from(c.asc_p8_path_content, 'base64').toString('utf8'));
   if (c.p12_path_content) fs.writeFileSync(p12File, Buffer.from(c.p12_path_content, 'base64'));
   if (c.mobileprovision_path_content) fs.writeFileSync(provFile, Buffer.from(c.mobileprovision_path_content, 'base64'));
 

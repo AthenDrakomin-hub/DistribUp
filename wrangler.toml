@@ -8,7 +8,9 @@ compatibility_flags = ["nodejs_compat"]
 [vars]
 BASE_URL = "https://distribup.your-domain.workers.dev"
 NODE_ENV = "production"
-MAX_UPLOAD_SIZE = "524288000"  # 500MB
+MAX_UPLOAD_SIZE = "524288000"
+# Public R2 URL (bind a custom domain to your R2 bucket, e.g. dl.yourdomain.com)
+R2_PUBLIC_BASE = "https://dl.yourdomain.com"
 
 # App Store Connect API (optional, for automatic iOS device registration)
 ASC_ISSUER_ID = ""

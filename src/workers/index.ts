@@ -439,18 +439,20 @@ async function handleUpload(req, env) {
   const filename = `${platform}_${app.id}_${timestamp}.${ext}`;
   const buffer = Buffer.from(await file.arrayBuffer());
 
-  await env.STORAGE.put(filename, buffer, {
+  const storageKey = `raw/${platform}_${app.id}_${timestamp}.${ext}`;
+  await env.STORAGE.put(storageKey, buffer, {
     httpMetadata: { contentType: file.type || 'application/octet-stream' },
     customMetadata: { appId: String(app.id), platform }
   });
 
-  const storageUrl = `https://${env.STORAGE.bucketName}.r2.cloudflarestorage.com/${filename}`;
+  // Public R2 URL — VPS downloads this directly, bypassing Workers.
+  const storageUrl = `${env.R2_PUBLIC_BASE || ''}/${storageKey}`;
   await env.distribup_db.prepare(
     `INSERT INTO uploads (app_id, user_id, filename, original_name, file_size, file_type, storage_path, status)
      VALUES (?, ?, ?, ?, ?, ?, ?, 'uploaded')`
-  ).bind(appId, user.id, filename, file.name, buffer.length, `.${ext}`, storageUrl).run();
+  ).bind(appId, user.id, storageKey, file.name, buffer.length, `.${ext}`, storageUrl).run();
 
-  return json({ success: true, url: storageUrl, size: buffer.length, filename, platform });
+  return json({ success: true, url: storageUrl, size: buffer.length, filename: storageKey, platform });
 }
 
 async function handleListUploads(req, env) {
@@ -523,9 +525,8 @@ async function handleOnlineSign(req, env) {
   ).bind(appId).first();
   if (!upload) return new Response('No IPA uploaded for this app', { status: 404 });
 
-  // The raw IPA must be publicly reachable by the VPS. Use R2 public URL.
-  const baseUrl = url.origin;
-  const rawIpaUrl = `${baseUrl}/signed/${upload.storage_path.split('/').pop()}`;
+  // storage_path is already the public R2 URL (set at upload time)
+  const rawIpaUrl = upload.storage_path;
 
   // Call VPS sign service
   const signRes = await fetch(`${env.SIGNSERVER_URL}/sign`, {
@@ -910,11 +911,22 @@ async function handleVpsSigningConfig(req, env) {
   for (const field of ['asc_p8_path', 'p12_path', 'mobileprovision_path']) {
     if (row[field]) {
       const obj = await env.STORAGE.get(row[field]);
-      if (obj) out[field + '_content'] = await obj.text();
+      if (obj) {
+        const buf = new Uint8Array(await obj.arrayBuffer());
+        out[field + '_content'] = Buffer.from(buf).toString('base64');
+      }
     }
   }
   return json(out);
 }
+
+
+
+
+
+
+
+
 
 
 
