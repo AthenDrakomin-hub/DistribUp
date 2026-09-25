@@ -16,27 +16,52 @@ const execFileAsync = promisify(execFile);
 const app = express();
 app.use(express.json({ limit: '1mb' }));
 
-// ─── Config from env ──────────────────────────────────────────────────────────
+// ─── Minimal env: only connection + shared secret ────────────────────────────
 const PORT = process.env.PORT || 3001;
-const SHARED_SECRET = process.env.SHARED_SECRET; // Workers calls this with a header
-
-// Apple App Store Connect
-const ASC_ISSUER_ID = process.env.ASC_ISSUER_ID;
-const ASC_KEY_ID = process.env.ASC_KEY_ID;
-const ASC_PRIVATE_KEY = process.env.ASC_PRIVATE_KEY; // PEM string or path
-
-// Signing materials
-const P12_PATH = process.env.P12_PATH || '/opt/sign/cert.p12';
-const P12_PASSWORD = process.env.P12_PASSWORD;
-const MOBILEPROVISION_PATH = process.env.MOBILEPROVISION_PATH || '/opt/sign/profile.mobileprovision';
+const SHARED_SECRET = process.env.SHARED_SECRET;
+const WORKER_URL = process.env.WORKER_URL; // e.g. https://distribup.xxx.workers.dev
 const ZSIGN_PATH = process.env.ZSIGN_PATH || '/usr/local/bin/zsign';
 
-// R2 (S3-compatible)
-const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID;
-const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID;
-const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY;
-const R2_BUCKET = process.env.R2_BUCKET || 'distribup-files';
-const R2_PUBLIC_BASE = process.env.R2_PUBLIC_BASE || 'https://dl.example.com';
+if (!SHARED_SECRET || !WORKER_URL) {
+  console.error('ERROR: SHARED_SECRET and WORKER_URL must be set in .env');
+  process.exit(1);
+}
+
+// Pulled config (populated on startup + refreshed every 10 min)
+let cfg = null;
+const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sign-cfg-'));
+
+async function pullConfig() {
+  const res = await fetch(`${WORKER_URL}/api/vps/signing-config`, {
+    headers: { 'x-sign-secret': SHARED_SECRET }
+  });
+  if (!res.ok) throw new Error('Failed to pull config: HTTP ' + res.status);
+  const c = await res.json();
+
+  // Write materials to temp files
+  const p8File = path.join(workDir, 'AuthKey.p8');
+  const p12File = path.join(workDir, 'cert.p12');
+  const provFile = path.join(workDir, 'profile.mobileprovision');
+
+  if (c.asc_p8_path_content) fs.writeFileSync(p8File, c.asc_p8_path_content);
+  if (c.p12_path_content) fs.writeFileSync(p12File, Buffer.from(c.p12_path_content, 'base64'));
+  if (c.mobileprovision_path_content) fs.writeFileSync(provFile, Buffer.from(c.mobileprovision_path_content, 'base64'));
+
+  cfg = {
+    ascIssuerId: c.asc_issuer_id,
+    ascKeyId: c.asc_key_id,
+    ascP8Path: p8File,
+    p12Path: p12File,
+    p12Password: c.p12_password,
+    provisionPath: provFile,
+    r2PublicBase: c.r2_public_base
+  };
+  console.log('Config pulled: issuer=' + cfg.ascIssuerId + ' key=' + cfg.ascKeyId);
+}
+
+// Initial pull
+await pullConfig();
+setInterval(pullConfig, 10 * 60 * 1000);
 
 // ─── Apple ASC JWT (ES256) ───────────────────────────────────────────────────
 let cachedToken = null;
@@ -45,13 +70,11 @@ let tokenExpiry = 0;
 async function getAscToken() {
   if (cachedToken && Date.now() < tokenExpiry) return cachedToken;
 
-  const privateKey = ASC_PRIVATE_KEY.includes('BEGIN')
-    ? ASC_PRIVATE_KEY
-    : fs.readFileSync(ASC_PRIVATE_KEY, 'utf8');
+  const privateKey = fs.readFileSync(cfg.ascP8Path, 'utf8');
 
-  const header = { alg: 'ES256', kid: ASC_KEY_ID, typ: 'JWT' };
+  const header = { alg: 'ES256', kid: cfg.ascKeyId, typ: 'JWT' };
   const now = Math.floor(Date.now() / 1000);
-  const payload = { iss: ASC_ISSUER_ID, iat: now, exp: now + 1199, aud: 'appstoreconnect-v1' };
+  const payload = { iss: cfg.ascIssuerId, iat: now, exp: now + 1199, aud: 'appstoreconnect-v1' };
 
   const b64 = (obj) => Buffer.from(JSON.stringify(obj)).toString('base64url');
   const data = `${b64(header)}.${b64(payload)}`;
@@ -102,14 +125,15 @@ async function ensureDeviceRegistered(udid, name) {
   return { already: false, id: created.data.id };
 }
 
-// ─── R2 upload ───────────────────────────────────────────────────────────────
+// ─── R2 upload (S3 creds stay in .env; public base comes from web config) ─────
 const s3 = new AWS.S3({
-  endpoint: `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-  accessKeyId: R2_ACCESS_KEY_ID,
-  secretAccessKey: R2_SECRET_ACCESS_KEY,
+  endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+  accessKeyId: process.env.R2_ACCESS_KEY_ID,
+  secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
   region: 'auto',
   signatureVersion: 'v4'
 });
+const R2_BUCKET = process.env.R2_BUCKET || 'distribup-files';
 
 async function uploadToR2(localPath, objectKey) {
   const body = fs.readFileSync(localPath);
@@ -119,7 +143,7 @@ async function uploadToR2(localPath, objectKey) {
     Body: body,
     ContentType: 'application/octet-stream'
   }).promise();
-  return `${R2_PUBLIC_BASE}/${objectKey}`;
+  return `${cfg.r2PublicBase}/${objectKey}`;
 }
 
 // ─── Download helper ─────────────────────────────────────────────────────────
@@ -178,9 +202,9 @@ app.post('/sign', auth, async (req, res) => {
     // 3. Run zsign
     console.log('  running zsign...');
     await execFileAsync(ZSIGN_PATH, [
-      '-k', P12_PASSWORD,
-      '-p', P12_PATH,
-      '-m', MOBILEPROVISION_PATH,
+      '-k', cfg.p12Password,
+      '-p', cfg.p12Path,
+      '-m', cfg.provisionPath,
       '-o', signedIpa,
       rawIpa
     ], { maxBuffer: 1024 * 1024 * 512 });
@@ -203,7 +227,5 @@ app.post('/sign', auth, async (req, res) => {
 app.listen(PORT, () => {
   console.log(`DistribUp sign server listening on :${PORT}`);
   console.log(`  zsign: ${ZSIGN_PATH}`);
-  console.log(`  p12:   ${P12_PATH}`);
-  console.log(`  prov:  ${MOBILEPROVISION_PATH}`);
-  console.log(`  R2:    ${R2_PUBLIC_BASE}`);
+  console.log(`  worker: ${WORKER_URL}`);
 });

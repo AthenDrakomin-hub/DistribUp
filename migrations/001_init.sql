@@ -120,3 +120,17 @@ CREATE INDEX IF NOT EXISTS idx_uploads_app ON uploads(app_id);
 CREATE INDEX IF NOT EXISTS idx_uploads_created ON uploads(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_devices_team ON devices(team_id);
 CREATE INDEX IF NOT EXISTS idx_devices_udid ON devices(udid);
+
+-- Global signing config (single row, personal deployment)
+-- Files (p12, mobileprovision, p8) are uploaded to R2 and paths stored here.
+CREATE TABLE IF NOT EXISTS signing_config (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    asc_issuer_id TEXT DEFAULT '',
+    asc_key_id TEXT DEFAULT '',
+    asc_p8_path TEXT DEFAULT '',
+    p12_path TEXT DEFAULT '',
+    p12_password TEXT DEFAULT '',
+    mobileprovision_path TEXT DEFAULT '',
+    r2_public_base TEXT DEFAULT '',
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);

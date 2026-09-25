@@ -127,6 +127,34 @@
                 <div class="form-group"><label>New password</label><input type="password" id="newPwd"></div>
                 <button class="btn btn-primary" onclick="changePassword()">Update</button>
             </div>
+
+            <div class="card" style="max-width:640px">
+                <h3>iOS Signing Materials</h3>
+                <p style="color:#888;font-size:13px;margin-bottom:16px">Upload your p12, mobileprovision, and .p8 key here. The VPS sign server pulls these automatically.</p>
+
+                <div class="form-group"><label>App Store Connect Issuer ID</label><input id="scIssuer" placeholder="57246512-xxxx"></div>
+                <div class="form-group"><label>App Store Connect Key ID</label><input id="scKey" placeholder="X9Q7M2P4RS"></div>
+                <div class="form-group"><label>R2 Public Base URL</label><input id="scR2" placeholder="https://dl.yourdomain.com"></div>
+                <div class="form-group"><label>p12 Password</label><input type="password" id="scP12Pass" placeholder="p12 export password"></div>
+
+                <div class="form-group">
+                    <label>p12 Certificate</label>
+                    <input type="file" id="scP12File" accept=".p12">
+                    <small id="scP12Status" style="color:#888"></small>
+                </div>
+                <div class="form-group">
+                    <label>mobileprovision</label>
+                    <input type="file" id="scProvFile" accept=".mobileprovision">
+                    <small id="scProvStatus" style="color:#888"></small>
+                </div>
+                <div class="form-group">
+                    <label>App Store Connect .p8 Key</label>
+                    <input type="file" id="scP8File" accept=".p8">
+                    <small id="scP8Status" style="color:#888"></small>
+                </div>
+
+                <button class="btn btn-primary" onclick="saveSigningConfig()">Save signing config</button>
+            </div>
         </div>
     </div>
 
@@ -303,9 +331,55 @@
             else toast(d.error || 'Failed', false);
         }
 
+        async function uploadMaterial(fileInputId, statusId) {
+            const fi = document.getElementById(fileInputId);
+            const status = document.getElementById(statusId);
+            if (!fi.files[0]) return null;
+            const fd = new FormData();
+            fd.append('file', fi.files[0]);
+            const res = await fetch('/api/admin/signing-material', {
+                method: 'POST',
+                headers: { 'Authorization': 'Bearer ' + token },
+                body: fd
+            });
+            const d = await res.json();
+            if (d.ok) { status.textContent = 'Uploaded: ' + d.filename; return d.path; }
+            status.textContent = 'Upload failed: ' + (d.error || '');
+            return null;
+        }
+
+        async function loadSigningConfig() {
+            const d = await api('/admin/signing-config');
+            if (d.config) {
+                document.getElementById('scIssuer').value = d.config.asc_issuer_id || '';
+                document.getElementById('scKey').value = d.config.asc_key_id || '';
+                document.getElementById('scR2').value = d.config.r2_public_base || '';
+                if (d.config.p12_path) document.getElementById('scP12Status').textContent = 'Current: ' + d.config.p12_path.split('/').pop();
+                if (d.config.mobileprovision_path) document.getElementById('scProvStatus').textContent = 'Current: ' + d.config.mobileprovision_path.split('/').pop();
+                if (d.config.asc_p8_path) document.getElementById('scP8Status').textContent = 'Current: ' + d.config.asc_p8_path.split('/').pop();
+            }
+        }
+
+        async function saveSigningConfig() {
+            const p12Path = await uploadMaterial('scP12File', 'scP12Status');
+            const provPath = await uploadMaterial('scProvFile', 'scProvStatus');
+            const p8Path = await uploadMaterial('scP8File', 'scP8Status');
+            const body = {
+                asc_issuer_id: document.getElementById('scIssuer').value,
+                asc_key_id: document.getElementById('scKey').value,
+                r2_public_base: document.getElementById('scR2').value,
+                p12_password: document.getElementById('scP12Pass').value
+            };
+            if (p12Path) body.p12_path = p12Path;
+            if (provPath) body.mobileprovision_path = provPath;
+            if (p8Path) body.asc_p8_path = p8Path;
+            const d = await api('/admin/signing-config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+            if (d.ok) toast('Signing config saved'); else toast(d.error || 'Failed', false);
+        }
+
         function logout() { localStorage.removeItem('token'); location.href = '/'; }
 
-        loadMe().then(() => loadDashboard());
+        loadMe().then(() => { loadDashboard(); loadSigningConfig(); });
     </script>
 </body>
 </html>
