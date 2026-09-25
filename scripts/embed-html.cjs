@@ -16,7 +16,7 @@ tsContent = tsContent.replace(/import \{ [A-Z_]+_HTML \} from '\.\/[A-Z_]+\.js';
 
 // Build base64-encoded HTML constants
 let insertLines = '';
-const files = ['admin', 'login', 'register', 'index'];
+const files = ['admin', 'login', 'index', 'upload'];
 for (const name of files) {
   const htmlPath = path.join(publicDir, `${name}.html`);
   const content = fs.readFileSync(htmlPath, 'utf8');

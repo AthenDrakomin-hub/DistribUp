@@ -1,7 +1,7 @@
--- DistribUp D1 数据库初始化迁移
--- 运行命令: wrangler d1 execute <database_name> --file=migrations/001_init.sql --remote
+-- DistribUp D1 database initialization migration.
+-- Run: wrangler d1 execute <database_name> --file=migrations/001_init.sql --remote
 
--- 用户表
+-- Users
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT UNIQUE NOT NULL,
@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS users (
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- 团队表
+-- Teams
 CREATE TABLE IF NOT EXISTS teams (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS teams (
     FOREIGN KEY (owner_id) REFERENCES users(id)
 );
 
--- 应用表（支持 iOS / Android 双平台）
+-- Apps (iOS / Android)
 CREATE TABLE IF NOT EXISTS apps (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     team_id INTEGER NOT NULL,
@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS apps (
     FOREIGN KEY (created_by) REFERENCES users(id)
 );
 
--- 证书表（iOS p12 + Android keystore）
+-- Certificates (iOS p12 + Android keystore)
 CREATE TABLE IF NOT EXISTS certificates (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     team_id INTEGER NOT NULL,
@@ -60,7 +60,7 @@ CREATE TABLE IF NOT EXISTS certificates (
     FOREIGN KEY (team_id) REFERENCES teams(id)
 );
 
--- 设备表（iOS UDID 采集）
+-- Devices (iOS UDID enrollment)
 CREATE TABLE IF NOT EXISTS devices (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     team_id INTEGER NOT NULL,
@@ -73,7 +73,7 @@ CREATE TABLE IF NOT EXISTS devices (
     FOREIGN KEY (team_id) REFERENCES teams(id)
 );
 
--- 上传记录表
+-- Upload records
 CREATE TABLE IF NOT EXISTS uploads (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     app_id INTEGER NOT NULL,
@@ -93,7 +93,7 @@ CREATE TABLE IF NOT EXISTS uploads (
     FOREIGN KEY (user_id) REFERENCES users(id)
 );
 
--- 下载记录表
+-- Download records
 CREATE TABLE IF NOT EXISTS downloads (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     upload_id INTEGER NOT NULL,
@@ -104,7 +104,7 @@ CREATE TABLE IF NOT EXISTS downloads (
     FOREIGN KEY (upload_id) REFERENCES uploads(id)
 );
 
--- 签名文件记录表
+-- Signed file records
 CREATE TABLE IF NOT EXISTS signed_files (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     upload_id INTEGER NOT NULL,
@@ -113,7 +113,7 @@ CREATE TABLE IF NOT EXISTS signed_files (
     FOREIGN KEY (upload_id) REFERENCES uploads(id)
 );
 
--- 索引加速查询
+-- Indexes
 CREATE INDEX IF NOT EXISTS idx_apps_team ON apps(team_id);
 CREATE INDEX IF NOT EXISTS idx_apps_bundle ON apps(bundle_id);
 CREATE INDEX IF NOT EXISTS idx_uploads_app ON uploads(app_id);

@@ -1,21 +1,17 @@
 {
   "name": "distribup",
   "version": "2.0.0",
-  "description": "DistribUp - iOS/Android 应用分发系统（Cloudflare Workers 版）",
+  "description": "DistribUp - iOS/Android app distribution on Cloudflare Workers (D1 + R2)",
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
+    "build": "node scripts/embed-html.cjs",
+    "deploy": "npm run build && wrangler deploy",
     "db:migrate": "wrangler d1 execute distribup-db --file=migrations/001_init.sql --remote",
     "db:studio": "wrangler d1 execute distribup-db --interactive"
   },
   "keywords": ["ios", "android", "distribution", "cloudflare", "workers", "d1", "r2"],
-  "author": "",
   "license": "MIT",
-  "dependencies": {
-    "hono": "^4.5.0",
-    "bcryptjs": "^2.4.3"
-  },
   "devDependencies": {
     "wrangler": "^3.70.0",
     "@cloudflare/workers-types": "^4.20240529.0"

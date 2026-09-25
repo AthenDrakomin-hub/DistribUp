@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Upload - DistribUp</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f7; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
+        .box { background: white; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); width: 100%; max-width: 560px; padding: 40px; }
+        h1 { font-size: 24px; color: #333; margin-bottom: 8px; }
+        .sub { color: #888; margin-bottom: 24px; font-size: 14px; }
+        .dropzone { border: 2px dashed #d0d0e0; border-radius: 12px; padding: 40px 20px; text-align: center; cursor: pointer; transition: border-color 0.2s, background 0.2s; }
+        .dropzone:hover, .dropzone.drag { border-color: #667eea; background: #f0f2ff; }
+        .dropzone p { color: #666; margin-top: 8px; }
+        .dropzone .icon { font-size: 40px; }
+        input[type=file] { display: none; }
+        .meta { margin-top: 16px; padding: 12px; background: #f8f9fa; border-radius: 8px; font-size: 14px; color: #555; display: none; }
+        .bar { height: 6px; background: #eee; border-radius: 3px; margin-top: 16px; overflow: hidden; display: none; }
+        .bar > div { height: 100%; background: #667eea; width: 0%; transition: width 0.2s; }
+        .btn { display: inline-block; margin-top: 20px; padding: 12px 32px; background: #667eea; color: white; border: none; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; width: 100%; }
+        .btn:disabled { background: #b0b8e8; cursor: not-allowed; }
+        .result { margin-top: 24px; padding: 20px; border-radius: 12px; display: none; }
+        .result.ok { background: #e8f5e9; border: 1px solid #a5d6a7; }
+        .result.err { background: #ffebee; border: 1px solid #ef9a9a; }
+        .result h3 { margin-bottom: 12px; font-size: 16px; }
+        .result a { color: #1565c0; word-break: break-all; }
+        .qr { text-align: center; margin-top: 16px; }
+        .qr img { border-radius: 8px; }
+        .back { text-align: center; margin-top: 20px; }
+        .back a { color: #667eea; text-decoration: none; font-size: 14px; }
+    </style>
+</head>
+<body>
+    <div class="box">
+        <h1>📦 Upload Build</h1>
+        <p class="sub" id="appLabel">Preparing...</p>
+
+        <div class="dropzone" id="dz">
+            <div class="icon">📁</div>
+            <p><strong>Click to select</strong> or drag &amp; drop here</p>
+            <p id="hint">IPA for iOS, APK/XAPK/OBB for Android</p>
+        </div>
+        <input type="file" id="fileInput" accept=".ipa,.apk,.xapk,.obb">
+
+        <div class="meta" id="meta"></div>
+        <div class="bar" id="bar"><div id="barFill"></div></div>
+
+        <button class="btn" id="uploadBtn" disabled>Upload</button>
+
+        <div class="result" id="result"></div>
+
+        <div class="back"><a href="/admin.html">← Back to admin</a></div>
+    </div>
+
+    <script>
+        const params = new URLSearchParams(location.search);
+        const appId = params.get('id');
+        const token = localStorage.getItem('token');
+        if (!token) location.href = '/login.html';
+
+        let selectedFile = null;
+        const dz = document.getElementById('dz');
+        const fileInput = document.getElementById('fileInput');
+        const uploadBtn = document.getElementById('uploadBtn');
+        const meta = document.getElementById('meta');
+
+        async function loadApp() {
+            const res = await fetch('/api/apps/' + appId, { headers: { 'Authorization': 'Bearer ' + token } });
+            const data = await res.json();
+            if (data.app) {
+                document.getElementById('appLabel').textContent = data.app.name + ' · ' + data.app.platform + ' · v' + data.app.version;
+                document.getElementById('hint').textContent = data.app.platform === 'ios'
+                    ? 'Select an .ipa file'
+                    : 'Select .apk / .xapk / .obb';
+            }
+        }
+        loadApp();
+
+        dz.onclick = () => fileInput.click();
+        dz.ondragover = (e) => { e.preventDefault(); dz.classList.add('drag'); };
+        dz.ondragleave = () => dz.classList.remove('drag');
+        dz.ondrop = (e) => {
+            e.preventDefault(); dz.classList.remove('drag');
+            if (e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]);
+        };
+        fileInput.onchange = () => { if (fileInput.files[0]) setFile(fileInput.files[0]); };
+
+        function setFile(f) {
+            selectedFile = f;
+            meta.style.display = 'block';
+            meta.textContent = f.name + ' · ' + (f.size / 1024 / 1024).toFixed(2) + ' MB';
+            uploadBtn.disabled = false;
+        }
+
+        uploadBtn.onclick = () => {
+            if (!selectedFile) return;
+            uploadBtn.disabled = true;
+            uploadBtn.textContent = 'Uploading...';
+            document.getElementById('bar').style.display = 'block';
+
+            const form = new FormData();
+            form.append('file', selectedFile);
+
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', '/api/upload/' + appId);
+            xhr.setRequestHeader('Authorization', 'Bearer ' + token);
+            xhr.upload.onprogress = (e) => {
+                if (e.lengthComputable) {
+                    document.getElementById('barFill').style.width = (e.loaded / e.total * 100) + '%';
+                }
+            };
+            xhr.onload = () => {
+                const data = JSON.parse(xhr.responseText);
+                const result = document.getElementById('result');
+                if (xhr.status >= 200 && xhr.status < 300 && data.success) {
+                    result.className = 'result ok';
+                    showSuccess(result);
+                } else {
+                    result.className = 'result err';
+                    result.innerHTML = '<h3>Upload failed</h3><p>' + (data.error || xhr.statusText) + '</p>';
+                    result.style.display = 'block';
+                    uploadBtn.disabled = false;
+                    uploadBtn.textContent = 'Retry';
+                }
+            };
+            xhr.onerror = () => {
+                const result = document.getElementById('result');
+                result.className = 'result err';
+                result.innerHTML = '<h3>Network error</h3>';
+                result.style.display = 'block';
+                uploadBtn.disabled = false;
+                uploadBtn.textContent = 'Retry';
+            };
+            xhr.send(form);
+        };
+
+        async function showSuccess(el) {
+            // Fetch OTA / download link
+            const appRes = await fetch('/api/apps/' + appId, { headers: { 'Authorization': 'Bearer ' + token } });
+            const appData = await appRes.json();
+            const app = appData.app;
+
+            let html = '<h3>✓ Upload complete</h3>';
+            if (app.platform === 'ios') {
+                const otaRes = await fetch('/api/apps/' + appId + '/ota-url', { headers: { 'Authorization': 'Bearer ' + token } });
+                const ota = await otaRes.json();
+                html += '<p>Install on device:</p>';
+                html += '<p style="margin:8px 0"><a href="' + ota.itmsUrl + '">📲 Tap to install</a></p>';
+                html += '<div class="qr"><img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=' + encodeURIComponent(ota.itmsUrl) + '"></div>';
+            } else {
+                html += '<p>Direct download:</p>';
+                html += '<p style="margin:8px 0;word-break:break-all"><a href="/api/install/android-download/' + app.bundle_id + '">Download APK</a></p>';
+            }
+            el.innerHTML = html;
+            el.style.display = 'block';
+            uploadBtn.textContent = 'Upload another';
+            uploadBtn.disabled = false;
+        }
+    </script>
+</body>
+</html>
