@@ -1,0 +1,14 @@
+{
+  "name": "distribup-sign-server",
+  "version": "1.0.0",
+  "description": "DistribUp sidecar: iOS re-sign service (zsign + App Store Connect API + R2 upload)",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "aws-sdk": "^2.1632.0"
+  }
+}

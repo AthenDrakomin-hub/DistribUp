@@ -199,6 +199,7 @@ async function handleRequest(req, env, ctx) {
   if (/^\/api\/install\/manifest\/.+/.test(path) && method === 'GET') return handleManifest(req, env);
   if (/^\/api\/install\/ota\/.+/.test(path) && method === 'GET') return handleOta(req, env);
   if (/^\/api\/install\/android-download\/.+/.test(path) && method === 'GET') return handleAndroidDownload(req, env);
+  if (/^\/api\/install\/\d+\/online-sign/.test(path) && method === 'GET') return handleOnlineSign(req, env);
   if (path === '/api/install/udid-config' && method === 'GET') return handleUdidConfig(req, env);
   if (path === '/api/install/udid-collect' && method === 'POST') return handleUdidCollect(req, env);
 
@@ -496,6 +497,91 @@ async function handleResign(req, env) {
     return json({ error: 'Certificate has expired' }, 400);
   }
   return json({ message: 'iOS signing must be done via the zsign sidecar service', appId });
+}
+
+// Public endpoint: anonymous user scans QR -> this triggers on-demand re-sign on the VPS.
+// GET /api/install/:appId/online-sign?udid=xxx
+async function handleOnlineSign(req, env) {
+  const url = new URL(req.url);
+  const m = url.pathname.match(/\/api\/install\/(\d+)\/online-sign/);
+  const appId = parseInt(m[1]);
+  const udid = url.searchParams.get('udid');
+  if (!udid) return new Response('Missing udid parameter', { status: 400 });
+
+  const app = await env.distribup_db.prepare('SELECT * FROM apps WHERE id = ?').bind(appId).first();
+  if (!app) return new Response('App not found', { status: 404 });
+
+  const upload = await env.distribup_db.prepare(
+    "SELECT * FROM uploads WHERE app_id = ? AND platform = 'ios' ORDER BY created_at DESC LIMIT 1"
+  ).bind(appId).first();
+  if (!upload) return new Response('No IPA uploaded for this app', { status: 404 });
+
+  // The raw IPA must be publicly reachable by the VPS. Use R2 public URL.
+  const baseUrl = url.origin;
+  const rawIpaUrl = `${baseUrl}/signed/${upload.storage_path.split('/').pop()}`;
+
+  // Call VPS sign service
+  const signRes = await fetch(`${env.SIGNSERVER_URL}/sign`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-sign-secret': env.SIGNSERVER_SECRET
+    },
+    body: JSON.stringify({
+      udid,
+      ipaUrl: rawIpaUrl,
+      bundleId: app.bundle_id,
+      version: app.version
+    }),
+    // Workers CPU limit: this call can take 30-60s. Subrequest body timeout is 15s on free tier,
+    // but the VPS does the heavy work; this just waits.
+    signal: AbortSignal.timeout(120000)
+  });
+
+  if (!signRes.ok) {
+    const err = await signRes.text();
+    return new Response(`Signing failed: ${err}`, { status: 500 });
+  }
+
+  const { signedUrl } = await signRes.json();
+
+  // Build a one-off manifest pointing at the signed IPA
+  const manifestPlist = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>items</key><array><dict>
+    <key>assets</key><array><dict>
+      <key>kind</key><string>software-package</string>
+      <key>url</key><string>${signedUrl}</string>
+    </dict></array>
+    <key>metadata</key><dict>
+      <key>bundle-identifier</key><string>${app.bundle_id}</string>
+      <key>bundle-version</key><string>${app.version}</string>
+      <key>kind</key><string>software</string>
+      <key>title</key><string>${app.name}</string>
+    </dict>
+  </dict></array>
+</dict>
+</plist>`;
+
+  // Store manifest as a short-lived R2 object, or just redirect to itms directly
+  // For simplicity: return an HTML page that triggers the itms prompt
+  const itmsUrl = `itms-services://?action=download-manifest&url=${encodeURIComponent(signedUrl.replace(/\.ipa$/, '.plist'))}`;
+
+  // Persist manifest to R2 so iOS can fetch it
+  await env.STORAGE.put(`manifests/${app.bundle_id}-${udid}.plist`, manifestPlist, {
+    httpMetadata: { contentType: 'application/xml' }
+  });
+
+  return new Response(
+    `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">` +
+    `<title>Installing...</title></head><body style="font-family:system-ui;text-align:center;padding-top:40px">` +
+    `<p>Signing complete. Tap <a href="itms-services://?action=download-manifest&url=${encodeURIComponent(`${baseUrl}/signed/manifests/${app.bundle_id}-${udid}.plist`)}">here to install</a></p>` +
+    `<p style="color:#888;font-size:14px">If nothing happens, open this page in Safari.</p>` +
+    `</body></html>`,
+    { headers: { 'Content-Type': 'text/html' } }
+  );
 }
 
 async function handleAndroidSign(req, env) {

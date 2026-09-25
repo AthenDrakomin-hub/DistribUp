@@ -15,6 +15,10 @@ ASC_ISSUER_ID = ""
 ASC_KEY_ID = ""
 ASC_PRIVATE_KEY = ""
 
+# VPS sign sidecar (zsign on your Vultr box). SIGNSERVER_SECRET must be set via:
+#   wrangler secret put SIGNSERVER_SECRET
+SIGNSERVER_URL = "http://45.77.31.155:3001"
+
 # Static HTML is inlined into the Worker as base64 (see scripts/embed-html.cjs).
 # assets = { directory = "public" }
 

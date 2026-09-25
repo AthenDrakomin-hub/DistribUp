@@ -1,0 +1,17 @@
+[Unit]
+Description=DistribUp Sign Sidecar
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/sign-server
+ExecStart=/usr/bin/node /opt/sign-server/index.js
+Restart=on-failure
+RestartSec=5
+Environment=NODE_ENV=production
+
+# ─── Required env vars (fill in or use EnvironmentFile) ───
+EnvironmentFile=/opt/sign-server/.env
+
+[Install]
+WantedBy=multi-user.target
