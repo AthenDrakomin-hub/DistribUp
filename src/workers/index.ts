@@ -168,6 +168,16 @@ async function handleRequest(req, env, ctx) {
   const staticResp = getStaticFile(path);
   if (staticResp) return staticResp;
 
+  // ─── Public install routes (no auth — end users scan QR and install) ──────
+  // Landing page: /d/<bundleId>
+  if (/^\/d\/.+/.test(path) && method === 'GET') return handlePublicDownload(req, env);
+  // UDID enrollment mobileconfig: /api/install/mobileconfig?bundleId=xxx
+  if (path === '/api/install/mobileconfig' && method === 'GET') return handleMobileconfig(req, env);
+  // Apple Profile Service POST callback (plist XML body)
+  if (path === '/api/install/udid-callback' && method === 'POST') return handleUdidCallback(req, env);
+  // Online sign: /api/install/<appId>/online-sign?udid=xxx (no auth)
+  if (/^\/api\/install\/\d+\/online-sign/.test(path) && method === 'GET') return handleOnlineSign(req, env);
+
   // Auth routes (public signup disabled - personal deployment; admin creates users)
   if (path === '/api/auth/login' && method === 'POST') return handleLogin(req, env);
   if (path === '/api/auth/me' && method === 'GET') return handleMe(req, env);
@@ -200,14 +210,11 @@ async function handleRequest(req, env, ctx) {
   if (/^\/api\/install\/ota\/.+/.test(path) && method === 'GET') return handleOta(req, env);
   if (/^\/api\/install\/android-download\/.+/.test(path) && method === 'GET') return handleAndroidDownload(req, env);
   if (/^\/api\/install\/\d+\/online-sign/.test(path) && method === 'GET') return handleOnlineSign(req, env);
-  if (path === '/api/install/udid-config' && method === 'GET') return handleUdidConfig(req, env);
-  if (path === '/api/install/udid-collect' && method === 'POST') return handleUdidCollect(req, env);
 
   // Devices routes
   if (path === '/api/devices' && method === 'GET') return handleListDevices(req, env);
   if (path === '/api/devices' && method === 'POST') return handleAddDevice(req, env);
   if (/^\/api\/devices\/\d+$/.test(path) && method === 'DELETE') return handleDeleteDevice(req, env);
-  if (path === '/api/devices/collect-config' && method === 'GET') return handleCollectConfig(req, env);
 
   // Admin routes
   if (path === '/api/admin/users' && method === 'GET') return handleAdminUsers(req, env);
@@ -521,14 +528,42 @@ async function handleOnlineSign(req, env) {
   if (!app) return new Response('App not found', { status: 404 });
 
   const upload = await env.distribup_db.prepare(
-    "SELECT * FROM uploads WHERE app_id = ? AND platform = 'ios' ORDER BY created_at DESC LIMIT 1"
+    'SELECT * FROM uploads WHERE app_id = ? ORDER BY created_at DESC LIMIT 1'
   ).bind(appId).first();
   if (!upload) return new Response('No IPA uploaded for this app', { status: 404 });
 
-  // storage_path is already the public R2 URL (set at upload time)
   const rawIpaUrl = upload.storage_path;
+  const baseUrl = env.BASE_URL || `https://${req.headers.get('host')}`;
 
-  // Call VPS sign service
+  // Loading page shown while signing happens
+  const loadingHtml = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Signing...</title>
+<style>body{font-family:system-ui;display:flex;align-items:center;justify-content:center;min-height:100vh;background:#f5f5f7;margin:0}
+.box{text-align:center;padding:40px} .spinner{width:40px;height:40px;border:4px solid #e0e0e0;border-top-color:#667eea;border-radius:50%;animation:spin 1s linear infinite;margin:0 auto 20px}
+@keyframes spin{to{transform:rotate(360deg)}}</style></head><body>
+<div class="box"><div class="spinner"></div><p>Signing app for your device...<br><small>This takes 30-60 seconds. Do not close this page.</small></p></div>
+<script>
+async function doSign(){
+  try{
+    const res=await fetch('/api/install/${appId}/online-sign?udid=${udid}&do=1');
+    if(res.redirected){ location.href=res.url; return; }
+    const text=await res.text();
+    document.querySelector('.box').innerHTML='<p style="color:#e74c3c">'+text+'</p>';
+  }catch(e){document.querySelector('.box').innerHTML='<p style="color:#e74c3c">Error: '+e.message+'</p>'}
+}
+if(location.search.includes('do=1')){ doSign(); }
+else {
+  // First load: show loading page and trigger sign
+  location.href += '&do=1';
+}
+</script></body></html>`;
+
+  // If not the actual sign request (first load), return loading page
+  if (!url.searchParams.get('do')) {
+    return new Response(loadingHtml, { headers: { 'Content-Type': 'text/html' } });
+  }
+
+  // Actually call VPS sign service
   const signRes = await fetch(`${env.SIGNSERVER_URL}/sign`, {
     method: 'POST',
     headers: {
@@ -539,10 +574,9 @@ async function handleOnlineSign(req, env) {
       udid,
       ipaUrl: rawIpaUrl,
       bundleId: app.bundle_id,
-      version: app.version
+      version: app.version,
+      appName: app.name
     }),
-    // Workers CPU limit: this call can take 30-60s. Subrequest body timeout is 15s on free tier,
-    // but the VPS does the heavy work; this just waits.
     signal: AbortSignal.timeout(120000)
   });
 
@@ -551,43 +585,20 @@ async function handleOnlineSign(req, env) {
     return new Response(`Signing failed: ${err}`, { status: 500 });
   }
 
-  const { signedUrl } = await signRes.json();
+  const { manifestUrl } = await signRes.json();
 
-  // Build a one-off manifest pointing at the signed IPA
-  const manifestPlist = `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>items</key><array><dict>
-    <key>assets</key><array><dict>
-      <key>kind</key><string>software-package</string>
-      <key>url</key><string>${signedUrl}</string>
-    </dict></array>
-    <key>metadata</key><dict>
-      <key>bundle-identifier</key><string>${app.bundle_id}</string>
-      <key>bundle-version</key><string>${app.version}</string>
-      <key>kind</key><string>software</string>
-      <key>title</key><string>${app.name}</string>
-    </dict>
-  </dict></array>
-</dict>
-</plist>`;
-
-  // Store manifest as a short-lived R2 object, or just redirect to itms directly
-  // For simplicity: return an HTML page that triggers the itms prompt
-  const itmsUrl = `itms-services://?action=download-manifest&url=${encodeURIComponent(signedUrl.replace(/\.ipa$/, '.plist'))}`;
-
-  // Persist manifest to R2 so iOS can fetch it
-  await env.STORAGE.put(`manifests/${app.bundle_id}-${udid}.plist`, manifestPlist, {
-    httpMetadata: { contentType: 'application/xml' }
-  });
-
+  // Redirect to itms-services install prompt
+  const itmsUrl = `itms-services://?action=download-manifest&url=${encodeURIComponent(manifestUrl)}`;
   return new Response(
-    `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">` +
-    `<title>Installing...</title></head><body style="font-family:system-ui;text-align:center;padding-top:40px">` +
-    `<p>Signing complete. Tap <a href="itms-services://?action=download-manifest&url=${encodeURIComponent(`${baseUrl}/signed/manifests/${app.bundle_id}-${udid}.plist`)}">here to install</a></p>` +
-    `<p style="color:#888;font-size:14px">If nothing happens, open this page in Safari.</p>` +
-    `</body></html>`,
+    `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Ready to Install</title>
+<style>body{font-family:system-ui;display:flex;align-items:center;justify-content:center;min-height:100vh;background:#f5f5f7;margin:0}
+.box{text-align:center;padding:40px;max-width:400px} .btn{display:inline-block;padding:14px 40px;background:#007aff;color:#fff;border-radius:12px;text-decoration:none;font-size:17px;font-weight:600;margin-top:20px}
+.hint{color:#888;font-size:14px;margin-top:16px}</style></head><body>
+<div class="box">
+<h2>Signing complete!</h2>
+<a class="btn" href="${itmsUrl}">Tap to Install</a>
+<p class="hint">If nothing happens, open this page in <strong>Safari</strong>.</p>
+</div></body></html>`,
     { headers: { 'Content-Type': 'text/html' } }
   );
 }
@@ -690,35 +701,152 @@ async function handleAndroidDownload(req, env) {
   });
 }
 
-async function handleUdidConfig(req, env) {
+// ─── Public install handlers (no auth) ────────────────────────────────────────
+
+// Generate a Profile Service mobileconfig that makes iOS POST the UDID to our callback.
+async function handleMobileconfig(req, env) {
+  const url = new URL(req.url);
+  const bundleId = url.searchParams.get('bundleId') || '';
   const baseUrl = env.BASE_URL || `https://${req.headers.get('host')}`;
-  const config = `<?xml version="1.0" encoding="UTF-8"?>
+  const callbackUrl = `${baseUrl}/api/install/udid-callback?bundleId=${encodeURIComponent(bundleId)}`;
+
+  const uuid = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
+  const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>items</key>
-  <array>
-    <dict>
-      <key>assets</key>
-      <array>
-        <dict><key>kind</key><string>software</string><key>url</key><string>${baseUrl}/api/install/udid-collect</string></dict>
-      </array>
-      <key>metadata</key>
-      <dict><key>kind</key><string>software</string><key>title</key><string>UDID Enrollment</string></dict>
-    </dict>
-  </array>
+  <key>PayloadContent</key>
+  <dict>
+    <key>URL</key>
+    <string>${callbackUrl}</string>
+    <key>DeviceAttributes</key>
+    <array>
+      <string>UDID</string>
+      <string>PRODUCT</string>
+      <string>VERSION</string>
+    </array>
+  </dict>
+  <key>PayloadOrganization</key>
+  <string>DistribUp</string>
+  <key>PayloadDisplayName</key>
+  <string>Device Enrollment</string>
+  <key>PayloadVersion</key>
+  <integer>1</integer>
+  <key>PayloadUUID</key>
+  <string>${uuid}</string>
+  <key>PayloadIdentifier</key>
+  <string>com.distribup.profile-service</string>
+  <key>PayloadDescription</key>
+  <string>Collect device UDID to enable app installation</string>
+  <key>PayloadType</key>
+  <string>Profile Service</string>
 </dict>
 </plist>`;
-  return html(config);
+
+  return new Response(plist, {
+    headers: {
+      'Content-Type': 'application/x-apple-aspen-config',
+      'Content-Disposition': 'attachment; filename="udid.mobileconfig"'
+    }
+  });
 }
 
-async function handleUdidCollect(req, env) {
-  const { udid, name, platform = 'iOS', team_id } = await getJSON(req, env);
-  if (!udid) return json({ error: 'UDID is required' }, 400);
-  await env.distribup_db.prepare(
-    'INSERT OR REPLACE INTO devices (udid, name, platform, team_id, registered_at) VALUES (?, ?, ?, ?, ?)'
-  ).bind(udid, name, platform, team_id, new Date().toISOString()).run();
-  return json({ success: true, message: 'Device registered successfully' });
+// Apple POSTs the device info as plist XML here. We extract UDID and redirect to the install page.
+async function handleUdidCallback(req, env) {
+  const url = new URL(req.url);
+  const bundleId = url.searchParams.get('bundleId') || '';
+  const body = await req.text();
+
+  // Parse UDID from the plist XML Apple sends
+  const udidMatch = body.match(/<key>UDID<\/key>\s*<string>([^<]+)<\/string>/);
+  const productMatch = body.match(/<key>PRODUCT<\/key>\s*<string>([^<]+)<\/string>/);
+  const udid = udidMatch ? udidMatch[1] : '';
+
+  if (!udid) {
+    return new Response('<h1>Failed to read UDID. Please try again in Safari.</h1>', {
+      headers: { 'Content-Type': 'text/html' }
+    });
+  }
+
+  // Store device
+  try {
+    await env.distribup_db.prepare(
+      'INSERT OR REPLACE INTO devices (udid, name, platform, team_id, registered_at) VALUES (?, ?, ?, 1, ?)'
+    ).bind(udid, productMatch ? productMatch[1] : 'iOS', 'iOS', new Date().toISOString()).run();
+  } catch (e) { /* table may not have team_id yet; ignore */ }
+
+  // Redirect to the install page with UDID
+  const baseUrl = env.BASE_URL || `https://${req.headers.get('host')}`;
+  return Response.redirect(`${baseUrl}/d/${encodeURIComponent(bundleId)}?udid=${udid}`, 302);
+}
+
+// Public download / install landing page
+async function handlePublicDownload(req, env) {
+  const url = new URL(req.url);
+  const m = url.pathname.match(/^\/d\/(.+)/);
+  const bundleId = m ? m[1] : '';
+  const udid = url.searchParams.get('udid') || '';
+
+  const app = await env.distribup_db.prepare('SELECT * FROM apps WHERE bundle_id = ?').bind(bundleId).first();
+  if (!app) return new Response('App not found', { status: 404 });
+
+  const upload = await env.distribup_db.prepare(
+    'SELECT * FROM uploads WHERE app_id = ? ORDER BY created_at DESC LIMIT 1'
+  ).bind(app.id).first();
+
+  const baseUrl = env.BASE_URL || `https://${req.headers.get('host')}`;
+  const isIOS = app.platform === 'ios';
+  const isAndroid = app.platform === 'android';
+
+  let actionHtml = '';
+  if (isAndroid) {
+    const dlUrl = upload ? upload.storage_path : '#';
+    actionHtml = `<a class="btn" href="${dlUrl}">Download APK</a>`;
+  } else if (isIOS && udid) {
+    // We have the UDID — trigger online sign
+    actionHtml = `<a class="btn" href="/api/install/${app.id}/online-sign?udid=${udid}">Install Now</a>
+      <p class="hint">Signing takes 30-60 seconds. Please wait.</p>`;
+  } else if (isIOS) {
+    // No UDID yet — ask user to install the enrollment profile
+    actionHtml = `<a class="btn" href="/api/install/mobileconfig?bundleId=${encodeURIComponent(bundleId)}">
+      Step 1: Install Profile
+    </a>
+    <p class="hint">After installing the profile, you will be redirected back here to install the app.</p>`;
+  }
+
+  const sizeMB = upload ? (upload.file_size / 1024 / 1024).toFixed(1) : '?';
+
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${app.name} - Install</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background:#f5f5f7; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:20px; }
+.card { background:#fff; border-radius:20px; box-shadow:0 4px 24px rgba(0,0,0,.08); width:100%; max-width:380px; padding:32px; text-align:center; }
+.icon { width:96px; height:96px; border-radius:22px; background:linear-gradient(135deg,#667eea,#764ba2); margin:0 auto 16px; display:flex; align-items:center; justify-content:center; font-size:48px; }
+h1 { font-size:22px; color:#1a1a1a; margin-bottom:4px; }
+.ver { color:#888; font-size:14px; margin-bottom:16px; }
+.meta { color:#666; font-size:13px; margin-bottom:24px; line-height:1.6; }
+.btn { display:block; width:100%; padding:15px; background:#007aff; color:#fff; border-radius:12px; text-decoration:none; font-size:17px; font-weight:600; margin-bottom:12px; }
+.btn:active { background:#0056cc; }
+.hint { color:#999; font-size:13px; line-height:1.5; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="icon">${isIOS ? '📱' : '🤖'}</div>
+  <h1>${app.name}</h1>
+  <div class="ver">Version ${app.version}</div>
+  <div class="meta">${sizeMB} MB &middot; ${isIOS ? 'iOS' : 'Android'}</div>
+  ${actionHtml}
+</div>
+</body>
+</html>`;
+
+  return new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
 }
 
 // ─── Devices handlers ─────────────────────────────────────────────────────────
@@ -750,13 +878,6 @@ async function handleDeleteDevice(req, env) {
     'DELETE FROM devices WHERE id = ? AND team_id = ?'
   ).bind(id, user.team_id).run();
   return json({ message: 'Deleted' });
-}
-
-async function handleCollectConfig(req, env) {
-  const user = await authenticate(req, env);
-  if (!user) return json({ error: 'Not authenticated' }, 401);
-  const baseUrl = env.BASE_URL || `https://${req.headers.get('host')}`;
-  return json({ collectUrl: `${baseUrl}/api/install/udid-collect`, expiresIn: 86400 });
 }
 
 // ─── Admin handlers ────────────────────────────────────────────────────────────
