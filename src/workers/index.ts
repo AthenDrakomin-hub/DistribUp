@@ -171,11 +171,7 @@ async function handleRequest(req, env, ctx) {
   // ─── Public install routes (no auth — end users scan QR and install) ──────
   // Landing page: /d/<bundleId>
   if (/^\/d\/.+/.test(path) && method === 'GET') return handlePublicDownload(req, env);
-  // UDID enrollment mobileconfig: /api/install/mobileconfig?bundleId=xxx
-  if (path === '/api/install/mobileconfig' && method === 'GET') return handleMobileconfig(req, env);
-  // Apple Profile Service POST callback (plist XML body)
-  if (path === '/api/install/udid-callback' && method === 'POST') return handleUdidCallback(req, env);
-  // Online sign: /api/install/<appId>/online-sign?udid=xxx (no auth)
+  // Online sign: /api/install/<appId>/online-sign (enterprise mode, no UDID)
   if (/^\/api\/install\/\d+\/online-sign/.test(path) && method === 'GET') return handleOnlineSign(req, env);
 
   // Auth routes (public signup disabled - personal deployment; admin creates users)
@@ -516,13 +512,11 @@ async function handleResign(req, env) {
 }
 
 // Public endpoint: anonymous user scans QR -> this triggers on-demand re-sign on the VPS.
-// GET /api/install/:appId/online-sign?udid=xxx
+// GET /api/install/:appId/online-sign  (enterprise mode — no UDID needed)
 async function handleOnlineSign(req, env) {
   const url = new URL(req.url);
   const m = url.pathname.match(/\/api\/install\/(\d+)\/online-sign/);
   const appId = parseInt(m[1]);
-  const udid = url.searchParams.get('udid');
-  if (!udid) return new Response('Missing udid parameter', { status: 400 });
 
   const app = await env.distribup_db.prepare('SELECT * FROM apps WHERE id = ?').bind(appId).first();
   if (!app) return new Response('App not found', { status: 404 });
@@ -533,7 +527,6 @@ async function handleOnlineSign(req, env) {
   if (!upload) return new Response('No IPA uploaded for this app', { status: 404 });
 
   const rawIpaUrl = upload.storage_path;
-  const baseUrl = env.BASE_URL || `https://${req.headers.get('host')}`;
 
   // Loading page shown while signing happens
   const loadingHtml = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -541,29 +534,25 @@ async function handleOnlineSign(req, env) {
 <style>body{font-family:system-ui;display:flex;align-items:center;justify-content:center;min-height:100vh;background:#f5f5f7;margin:0}
 .box{text-align:center;padding:40px} .spinner{width:40px;height:40px;border:4px solid #e0e0e0;border-top-color:#667eea;border-radius:50%;animation:spin 1s linear infinite;margin:0 auto 20px}
 @keyframes spin{to{transform:rotate(360deg)}}</style></head><body>
-<div class="box"><div class="spinner"></div><p>Signing app for your device...<br><small>This takes 30-60 seconds. Do not close this page.</small></p></div>
+<div class="box"><div class="spinner"></div><p>Signing app...<br><small>Please wait, do not close this page.</small></p></div>
 <script>
 async function doSign(){
   try{
-    const res=await fetch('/api/install/${appId}/online-sign?udid=${udid}&do=1');
+    const res=await fetch('/api/install/${appId}/online-sign?do=1');
     if(res.redirected){ location.href=res.url; return; }
     const text=await res.text();
     document.querySelector('.box').innerHTML='<p style="color:#e74c3c">'+text+'</p>';
   }catch(e){document.querySelector('.box').innerHTML='<p style="color:#e74c3c">Error: '+e.message+'</p>'}
 }
 if(location.search.includes('do=1')){ doSign(); }
-else {
-  // First load: show loading page and trigger sign
-  location.href += '&do=1';
-}
+else { location.href += '?do=1'; }
 </script></body></html>`;
 
-  // If not the actual sign request (first load), return loading page
   if (!url.searchParams.get('do')) {
     return new Response(loadingHtml, { headers: { 'Content-Type': 'text/html' } });
   }
 
-  // Actually call VPS sign service
+  // Call VPS sign service (enterprise mode — no UDID)
   const signRes = await fetch(`${env.SIGNSERVER_URL}/sign`, {
     method: 'POST',
     headers: {
@@ -571,7 +560,6 @@ else {
       'x-sign-secret': env.SIGNSERVER_SECRET
     },
     body: JSON.stringify({
-      udid,
       ipaUrl: rawIpaUrl,
       bundleId: app.bundle_id,
       version: app.version,
@@ -703,89 +691,11 @@ async function handleAndroidDownload(req, env) {
 
 // ─── Public install handlers (no auth) ────────────────────────────────────────
 
-// Generate a Profile Service mobileconfig that makes iOS POST the UDID to our callback.
-async function handleMobileconfig(req, env) {
-  const url = new URL(req.url);
-  const bundleId = url.searchParams.get('bundleId') || '';
-  const baseUrl = env.BASE_URL || `https://${req.headers.get('host')}`;
-  const callbackUrl = `${baseUrl}/api/install/udid-callback?bundleId=${encodeURIComponent(bundleId)}`;
-
-  const uuid = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
-  const plist = `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>PayloadContent</key>
-  <dict>
-    <key>URL</key>
-    <string>${callbackUrl}</string>
-    <key>DeviceAttributes</key>
-    <array>
-      <string>UDID</string>
-      <string>PRODUCT</string>
-      <string>VERSION</string>
-    </array>
-  </dict>
-  <key>PayloadOrganization</key>
-  <string>DistribUp</string>
-  <key>PayloadDisplayName</key>
-  <string>Device Enrollment</string>
-  <key>PayloadVersion</key>
-  <integer>1</integer>
-  <key>PayloadUUID</key>
-  <string>${uuid}</string>
-  <key>PayloadIdentifier</key>
-  <string>com.distribup.profile-service</string>
-  <key>PayloadDescription</key>
-  <string>Collect device UDID to enable app installation</string>
-  <key>PayloadType</key>
-  <string>Profile Service</string>
-</dict>
-</plist>`;
-
-  return new Response(plist, {
-    headers: {
-      'Content-Type': 'application/x-apple-aspen-config',
-      'Content-Disposition': 'attachment; filename="udid.mobileconfig"'
-    }
-  });
-}
-
-// Apple POSTs the device info as plist XML here. We extract UDID and redirect to the install page.
-async function handleUdidCallback(req, env) {
-  const url = new URL(req.url);
-  const bundleId = url.searchParams.get('bundleId') || '';
-  const body = await req.text();
-
-  // Parse UDID from the plist XML Apple sends
-  const udidMatch = body.match(/<key>UDID<\/key>\s*<string>([^<]+)<\/string>/);
-  const productMatch = body.match(/<key>PRODUCT<\/key>\s*<string>([^<]+)<\/string>/);
-  const udid = udidMatch ? udidMatch[1] : '';
-
-  if (!udid) {
-    return new Response('<h1>Failed to read UDID. Please try again in Safari.</h1>', {
-      headers: { 'Content-Type': 'text/html' }
-    });
-  }
-
-  // Store device
-  try {
-    await env.distribup_db.prepare(
-      'INSERT OR REPLACE INTO devices (udid, name, platform, team_id, registered_at) VALUES (?, ?, ?, 1, ?)'
-    ).bind(udid, productMatch ? productMatch[1] : 'iOS', 'iOS', new Date().toISOString()).run();
-  } catch (e) { /* table may not have team_id yet; ignore */ }
-
-  // Redirect to the install page with UDID
-  const baseUrl = env.BASE_URL || `https://${req.headers.get('host')}`;
-  return Response.redirect(`${baseUrl}/d/${encodeURIComponent(bundleId)}?udid=${udid}`, 302);
-}
-
-// Public download / install landing page
+// Public download / install landing page (enterprise sign — no UDID needed)
 async function handlePublicDownload(req, env) {
   const url = new URL(req.url);
   const m = url.pathname.match(/^\/d\/(.+)/);
   const bundleId = m ? m[1] : '';
-  const udid = url.searchParams.get('udid') || '';
 
   const app = await env.distribup_db.prepare('SELECT * FROM apps WHERE bundle_id = ?').bind(bundleId).first();
   if (!app) return new Response('App not found', { status: 404 });
@@ -794,7 +704,6 @@ async function handlePublicDownload(req, env) {
     'SELECT * FROM uploads WHERE app_id = ? ORDER BY created_at DESC LIMIT 1'
   ).bind(app.id).first();
 
-  const baseUrl = env.BASE_URL || `https://${req.headers.get('host')}`;
   const isIOS = app.platform === 'ios';
   const isAndroid = app.platform === 'android';
 
@@ -802,16 +711,10 @@ async function handlePublicDownload(req, env) {
   if (isAndroid) {
     const dlUrl = upload ? upload.storage_path : '#';
     actionHtml = `<a class="btn" href="${dlUrl}">Download APK</a>`;
-  } else if (isIOS && udid) {
-    // We have the UDID — trigger online sign
-    actionHtml = `<a class="btn" href="/api/install/${app.id}/online-sign?udid=${udid}">Install Now</a>
-      <p class="hint">Signing takes 30-60 seconds. Please wait.</p>`;
   } else if (isIOS) {
-    // No UDID yet — ask user to install the enrollment profile
-    actionHtml = `<a class="btn" href="/api/install/mobileconfig?bundleId=${encodeURIComponent(bundleId)}">
-      Step 1: Install Profile
-    </a>
-    <p class="hint">After installing the profile, you will be redirected back here to install the app.</p>`;
+    // Enterprise sign: no UDID needed, just trigger on-demand re-sign
+    actionHtml = `<a class="btn" href="/api/install/${app.id}/online-sign">Install Now</a>
+      <p class="hint">Signing takes a few seconds. Please wait. Open in Safari if nothing happens.</p>`;
   }
 
   const sizeMB = upload ? (upload.file_size / 1024 / 1024).toFixed(1) : '?';

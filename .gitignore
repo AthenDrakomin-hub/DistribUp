@@ -8,3 +8,9 @@ signed/
 .env
 .env.local
 .DS_Store
+
+# Signing materials — never commit
+signing-materials/
+*.p12
+*.mobileprovision
+*.p8
